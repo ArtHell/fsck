@@ -1,77 +1,107 @@
 #ifndef FILESYSTEM_H_
 #define FILESYSTEM_H_
 
+#include <iostream>
 #include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <cstdio>
+#include <cstdlib>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <inttypes.h>
-#include "ext2_fs.h" // structures of ext2 system
+#include "ext2_fs.h"
+
+using namespace std;
 
 #if defined(__FreeBSD__)
 #define lseek64 lseek
 #endif
 extern int64_t lseek64(int, int64_t, int);
 
-const unsigned int SECTOR_SIZE_BYTES = 512;
+const int SECTOR_SIZE_BYTES = 512;
 const unsigned int PARTITION_RECORD_SIZE = 16;
-const unsigned int BLOCK_SIZE= 1024;
-static unsigned char superblockBuffer[6 * 512];
-static struct ext2_super_block super_block;
 
-typedef struct partition_entry {
+struct PartitionEntry {
   unsigned int partitionNumber;
   unsigned int type;
   unsigned int startSector;
   unsigned int length;
-  struct partition_entry *next;
-} partition_entry;
+  struct PartitionEntry *next;
+};
 
-typedef struct inode_data {
-  unsigned int inode_no;
-  unsigned int file_type;
-  unsigned int file_length;
-  unsigned int no_data_blocks;
-  unsigned int pointers_data_block[15];
-} inode_data;
+struct InodeData {
+  unsigned int inodeNumber;
+  unsigned int fileType;
+  unsigned int fileLength;
+  unsigned int hardLinksQt;
+  unsigned int dataBlocksQt;
+  unsigned int dataBlocksPointers[15];
+};
 
 class FileSystem {
  private:
 
+  /*
+   * Data
+   */
+
   int device;
   int extBootRecordOffset;
+  unsigned int lostFoundInode;
+  unsigned int firstRootBataBlock;
+  struct ext2_super_block super_block;
+  unsigned char superblockBuffer[6 * 512];
+  unsigned int blockSize;
+  unsigned int *inodeMap;
+  unsigned int *inodeLinkCount;
+  unsigned int *blockMap;
+
+  /*
+   * Methods
+   */
 
   void readSectors(int64_t, unsigned int, void*);
-  partition_entry* readPartitionEntry(unsigned char*, int, int);
-  partition_entry* readPartitionTable(int, int, int);
+  void writeSectors(int64_t, unsigned int, void*);
+  PartitionEntry* readPartitionEntry(unsigned char*, int, int);
+  PartitionEntry* readPartitionTable(int, int, int);
   unsigned int getValueFromBytes(unsigned char*, int, int);
   unsigned int getInodeTableBlockNumber(unsigned int);
   unsigned int getBlockStartingByte(int);
-  unsigned int getBlockSector(partition_entry*, unsigned int);
+  unsigned int getBlockSector(PartitionEntry*, unsigned int);
   unsigned int getInodeStartingByte(unsigned int);
-  void scanDirectoryBlock(partition_entry*, unsigned int);
-  void parseFilesystem(partition_entry*, unsigned int);
-  void readIndirectDataBlocks(partition_entry*, unsigned int, unsigned int);
-  int checkInodeBitmap(partition_entry*, unsigned int);
-  int checkBlockBitmap(partition_entry*, unsigned int);
-  int getIndirectDataBlockQt(partition_entry*, unsigned int,
-                                    unsigned int);
-  int getDataBlockQt(partition_entry*, unsigned int*);
-  inode_data readInode(partition_entry*, unsigned int);
-  void readDataBlocks(partition_entry*, unsigned int*);
+  void writeInodeEntry(PartitionEntry*, unsigned int);
+  unsigned int parseFilesystem(PartitionEntry*, unsigned int, unsigned int,
+                               unsigned int, unsigned int, int);
+  unsigned int readIndirectDataBlocks(PartitionEntry*, unsigned int,
+                                      unsigned int, unsigned int, unsigned int,
+                                      int, int, int);
+  unsigned int readDataBlocks(PartitionEntry*, unsigned int, unsigned int,
+                                unsigned int*, int, int, int);
+  void UpdateHardLinkCounter(PartitionEntry*, unsigned int, unsigned int);
+  InodeData readInode(PartitionEntry*, unsigned int);
+  int checkInodeBitmap(PartitionEntry*, unsigned int);
+  int checkBlockBitmap(PartitionEntry*, unsigned int);
+  void setBlockBitmap(PartitionEntry*, unsigned int, int);
+  int getIndirectDataBlockQt(PartitionEntry*, unsigned int, unsigned int);
+  int getDataBlockQt(PartitionEntry*, unsigned int*);
 
  public:
 
   FileSystem(const char*);
-  partition_entry* getPartitionTable(int, int);
-  partition_entry *getPartitionEntry(partition_entry*, unsigned int);
-  void readSuperblock(partition_entry*);
-  void readRootInode(partition_entry*);
   virtual ~FileSystem();
+
+  int startFileSystemChecking();
+
+  void readSuperblock(PartitionEntry*);
+  void readRootInode(PartitionEntry*);
+
+  PartitionEntry* getPartitionTable(int, int);
+  PartitionEntry *getPartitionEntry(PartitionEntry*, unsigned int);
+
+  void setInfo();
+  void freeInfo();
 };
 
 #endif /* FILESYSTEM_H_ */

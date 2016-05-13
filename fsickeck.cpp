@@ -6,12 +6,12 @@
 #include "FileSystem.h"
 
 int main(int argc, char **argv) {
-  char *disk_image = "disk"; // will be entered by user
+  char *disk_image = "disk";  // will be entered by user
+
   FileSystem* ext2 = new FileSystem(disk_image);
-  partition_entry *entry = ext2->getPartitionTable(0, 0);
-  ext2->readSuperblock(entry);
-  ext2->readRootInode(entry);
+  ext2->startFileSystemChecking();
   delete ext2;
+  printf("End of checking. Partitions has been repaired.");
   return 0;
 }
 
