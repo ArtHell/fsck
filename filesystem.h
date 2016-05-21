@@ -23,8 +23,12 @@ using namespace std;
 extern int64_t lseek64(int, int64_t, int);
 
 const int SECTOR_SIZE_BYTES = 512;
+const int SYSTEM_BOOTSTRAP_SIZE = 446;
 const unsigned int PARTITION_RECORD_SIZE = 16;
-
+const int EXTENDED_PARTITION = 0x05;
+const int EXT2_PARTITION = 0x83;
+const int SWAP_PARTITION = 0x82;
+const int UNUSED_PARTITION = 0x00;
 struct PartitionEntry {
   unsigned int partitionNumber;
   unsigned int type;
@@ -68,6 +72,7 @@ class FileSystem {
    * Methods
    */
 
+  void startFileSystemChecking();
   void readSectors(int64_t, unsigned int, void*);
   void writeSectors(int64_t, unsigned int, void*);
   PartitionEntry* readPartitionEntry(unsigned char*, int, int);
@@ -89,7 +94,7 @@ class FileSystem {
   InodeData readInode(PartitionEntry*, unsigned int);
   int checkInodeBitmap(PartitionEntry*, unsigned int);
   int checkBlockBitmap(PartitionEntry*, unsigned int);
-  void setBlockBitmap(PartitionEntry*, unsigned int, int);
+  void setBlockBitmap(PartitionEntry*, unsigned int);
   int getIndirectDataBlockQt(PartitionEntry*, unsigned int, unsigned int);
   int getDataBlockQt(PartitionEntry*, unsigned int*);
   void readSuperblock(PartitionEntry*);
@@ -98,13 +103,12 @@ class FileSystem {
   PartitionEntry *getPartitionEntry(PartitionEntry*, unsigned int);
   void setInfo();
   void freeInfo();
+  void finishFileSystemChecking();
 
  public:
 
   FileSystem(const char*, bool, QTextBrowser*, QProgressBar*);
   virtual ~FileSystem();
-
-  int startFileSystemChecking();
 };
 
 #endif /* FILESYSTEM_H_ */

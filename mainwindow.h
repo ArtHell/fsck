@@ -20,19 +20,12 @@ public:
     ~MainWindow();
 
 private slots:
-    void on_startButton_clicked();
+    void on_startButton_clicked(); // start checking
 
-    void on_checkBox_stateChanged(int arg1);
-
-    void on_chooseToolButton_triggered(QAction *arg1);
-
-    void on_chooseToolButton_clicked();
+    void on_chooseToolButton_clicked(); // choose disk image
 
 private:
     Ui::MainWindow *ui;
-    bool performRepair;
-    QString disk_image;
-
 };
 
 #endif // MAINWINDOW_H

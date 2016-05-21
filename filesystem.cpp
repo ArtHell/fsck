@@ -1,9 +1,10 @@
 #include "filesystem.h"
 
-FileSystem::FileSystem(const char* diskImage, bool performRepair, QTextBrowser *textBrowser, QProgressBar *progressBar) {
+FileSystem::FileSystem(const char* diskImage, bool performRepair,
+                       QTextBrowser *textBrowser, QProgressBar *progressBar) {
+  textBrowser->clear();
   if ((device = open(diskImage, O_RDWR)) == -1) {
-      textBrowser->clear();
-      textBrowser->append("Device not found.");
+    textBrowser->append("Device not found.");
     return;
   }
   errorQt = 0;
@@ -14,19 +15,21 @@ FileSystem::FileSystem(const char* diskImage, bool performRepair, QTextBrowser *
   inodeMap = NULL;
   inodeLinkCount = NULL;
   blockMap = NULL;
+
   this->performRepair = performRepair;
-  textBrowser->clear();
   this->textBrowser = textBrowser;
   this->progressBar = progressBar;
+
   startFileSystemChecking();
+  finishFileSystemChecking();
 }
 
-int FileSystem::startFileSystemChecking() {
+void FileSystem::startFileSystemChecking() {
   PartitionEntry *entry = getPartitionTable(0, 0);
   progressBar->setValue(10);
   PartitionEntry *temp = entry;
   while (temp != NULL) {
-    if (temp->type == 0x83) {
+    if (temp->type == EXT2_PARTITION) {
       readSuperblock(temp);
       setInfo();
       readRootInode(temp);
@@ -35,14 +38,6 @@ int FileSystem::startFileSystemChecking() {
     temp = temp->next;
     progressBar->setValue(progressBar->value() + 30);
   }
-  progressBar->setValue(100);
-      textBrowser->append(QString::number(errorQt) + " errors were found. ");
-  if(performRepair){
-      textBrowser->append("Filesystem has been successfully checked and repaired.");
-  } else {
-      textBrowser->append("Filesystem has been successfully checked. For repair uncheck box under start button.");
-  }
-  return 0;
 }
 
 void FileSystem::readSectors(int64_t startSector, unsigned int sectorsQt,
@@ -55,7 +50,7 @@ void FileSystem::readSectors(int64_t startSector, unsigned int sectorsQt,
   sectorOffset = startSector * SECTOR_SIZE_BYTES;
 
   if ((lret = lseek64(device, sectorOffset, SEEK_SET)) != sectorOffset) {
-      exit(-1);
+    exit(-1);
   }
 
   bytesToRead = SECTOR_SIZE_BYTES * sectorsQt;
@@ -90,7 +85,7 @@ PartitionEntry* FileSystem::readPartitionEntry(unsigned char *partitionBuffer,
                                                int sectorOffset) {
 
   int type = (int) partitionBuffer[4] & 0xFF;
-  if (type != 0x82 && type != 0x00 && type != 0x83 && type != 0x05) {
+  if (type != SWAP_PARTITION && type != UNUSED_PARTITION && type != EXT2_PARTITION && type != EXTENDED_PARTITION) {
     return NULL;
   }
 
@@ -98,22 +93,13 @@ PartitionEntry* FileSystem::readPartitionEntry(unsigned char *partitionBuffer,
   entry->partitionNumber = partitionNumber;
   entry->type = type;
 
-  if (type == 0x05) {
-    entry->startSector = ((((int) partitionBuffer[11] & 0xFF) << 24)
-        | (((int) partitionBuffer[10] & 0xFF) << 16)
-        | (((int) partitionBuffer[9] & 0xFF) << 8)
-        | (((int) partitionBuffer[8]) & 0xFF)) + extBootRecordOffset;
+  if (type == EXTENDED_PARTITION) {
+    entry->startSector = extBootRecordOffset + getValueFromBytes(partitionBuffer, 8, 4);
   } else {
-    entry->startSector = ((((int) partitionBuffer[11] & 0xFF) << 24)
-        | (((int) partitionBuffer[10] & 0xFF) << 16)
-        | (((int) partitionBuffer[9] & 0xFF) << 8)
-        | (((int) partitionBuffer[8]) & 0xFF)) + sectorOffset;
+    entry->startSector = sectorOffset + getValueFromBytes(partitionBuffer, 8, 4);
   }
 
-  entry->length = (((int) partitionBuffer[15] & 0xFF) << 24)
-      | (((int) partitionBuffer[14] & 0xFF) << 16)
-      | (((int) partitionBuffer[13] & 0xFF) << 8)
-      | ((int) partitionBuffer[12] & 0xFF);
+  entry->length = getValueFromBytes(partitionBuffer, 12, 4);
 
   entry->next = NULL;
 
@@ -122,16 +108,15 @@ PartitionEntry* FileSystem::readPartitionEntry(unsigned char *partitionBuffer,
 
 PartitionEntry* FileSystem::readPartitionTable(int sector, int partitionNumber,
                                                int sectorOffset) {
-  unsigned int partitionAddress, i;
   unsigned char partitionBuffer[PARTITION_RECORD_SIZE];
   unsigned char buf[SECTOR_SIZE_BYTES];
 
   readSectors(sector, 1, buf);
 
-  partitionAddress = 446 + ((partitionNumber - 1) * 16);
-  for (i = partitionAddress; i < partitionAddress + PARTITION_RECORD_SIZE;
-      i++) {
-    partitionBuffer[i - partitionAddress] = buf[i];
+  unsigned int partitionAddress = SYSTEM_BOOTSTRAP_SIZE + ((partitionNumber - 1) * PARTITION_RECORD_SIZE);
+  for (unsigned int i = partitionAddress, j = 0; i < partitionAddress + PARTITION_RECORD_SIZE;
+      i++, j++) {
+    partitionBuffer[j] = buf[i];
   }
 
   PartitionEntry *part = readPartitionEntry(partitionBuffer, partitionNumber,
@@ -196,8 +181,8 @@ void FileSystem::writeInodeEntry(PartitionEntry *partition,
       fileEntry = (struct ext2_dir_entry_2*) (buf + i);
       fileEntry->inode = inodeNumber;
       sprintf(fileEntry->name, "%d", inodeNumber);
-      fileEntry->rec_len = (__u16 ) (blockSize - i);
-      fileEntry->name_len = (__u8 ) (strlen(fileEntry->name));
+      fileEntry->rec_len = (__u16)(blockSize - i);
+      fileEntry->name_len = (__u8)(strlen(fileEntry->name));
       if (!(inode_cur.fileType & EXT2_S_IFREG) == 0)
         fileEntry->file_type = 1;
       else if (!(inode_cur.fileType & EXT2_S_IFDIR) == 0)
@@ -236,14 +221,18 @@ unsigned int FileSystem::parseFilesystem(PartitionEntry *partition,
     if (passNumber == 1 && performCheck == 1) {
       if (fileEntry->inode != currentInode
           && (strcmp(fileEntry->name, ".") == 0)) {
-        QString tmpStr = QString("Entry '.' has inode ") + QString::number(fileEntry->inode) + QString(" instead of ") + QString::number(currentInode) + QString(".\n") ;
+        QString tmpStr = QString("Entry '.' has inode ")
+            + QString::number(fileEntry->inode) + QString(" instead of ")
+            + QString::number(currentInode) + QString(".\n");
         textBrowser->append(tmpStr);
         errorQt++;
         fileEntry->inode = currentInode;
         writeSectors(blockSector, (blockSize / SECTOR_SIZE_BYTES), buf);
       }
       if (fileEntry->inode != parentInode && (!strcmp(fileEntry->name, ".."))) {
-        QString tmpStr = QString("Entry '..' has inode ") + QString::number(fileEntry->inode) + QString(" instead of ") + QString::number(parentInode) + QString(".\n") ;
+        QString tmpStr = QString("Entry '..' has inode ")
+            + QString::number(fileEntry->inode) + QString(" instead of ")
+            + QString::number(parentInode) + QString(".\n");
         textBrowser->append(tmpStr);
         errorQt++;
         fileEntry->inode = parentInode;
@@ -428,7 +417,7 @@ int FileSystem::checkBlockBitmap(PartitionEntry *partition,
 }
 
 void FileSystem::setBlockBitmap(PartitionEntry *partition,
-                                unsigned int blockNumber, int value) {
+                                unsigned int blockNumber) {
   if (blockNumber == 0)
     return;
   unsigned char blockBitmap[blockSize];
@@ -501,7 +490,7 @@ void FileSystem::readSuperblock(PartitionEntry *partition) {
 void FileSystem::readRootInode(PartitionEntry *partition) {
   unsigned int i;
   InodeData inode = readInode(partition, 2);
-  blockSize = 1 << (super_block.s_log_block_size + 10);
+  blockSize = 1024 << super_block.s_log_block_size;
   firstRootBataBlock = inode.dataBlocksPointers[0];
   readDataBlocks(partition, 2, 2, inode.dataBlocksPointers, 1, 1, 2);
   readDataBlocks(partition, 2, 2, inode.dataBlocksPointers, 2, 1, 2);
@@ -517,7 +506,10 @@ void FileSystem::readRootInode(PartitionEntry *partition) {
     if (bitmapValue == 1 && inodeMap[i] == 0) {
       InodeData in = readInode(partition, i);
       if (in.fileType != 0) {
-        QString tmpStr = QString("Inode ") + QString::number(i) + QString(" has invalid entry in inode bitmap. Bitmap value: ") + QString::number(bitmapValue) + QString(", collected value:") + QString::number(inodeMap[i]) + QString(".\n");
+        QString tmpStr = QString("Inode ") + QString::number(i)
+            + QString(" has invalid entry in inode bitmap. Bitmap value: ")
+            + QString::number(bitmapValue) + QString(", collected value:")
+            + QString::number(inodeMap[i]) + QString(".\n");
         textBrowser->append(tmpStr);
         errorQt++;
         if (performRepair) {
@@ -532,7 +524,11 @@ void FileSystem::readRootInode(PartitionEntry *partition) {
     InodeData in = readInode(partition, i);
     if (inodeLinkCount[i] != in.hardLinksQt) {
       if (in.fileType != 0) {
-        QString tmpStr = QString("Inode ") + QString::number(i) + QString(" has invalid inode count in inode entry. Current value : ") + QString::number(in.hardLinksQt) + QString(", collected value:") + QString::number(inodeLinkCount[i]) + QString(".\n");
+        QString tmpStr = QString("Inode ") + QString::number(i)
+            + QString(
+                " has invalid inode count in inode entry. Current value : ")
+            + QString::number(in.hardLinksQt) + QString(", collected value:")
+            + QString::number(inodeLinkCount[i]) + QString(".\n");
         textBrowser->append(tmpStr);
         errorQt++;
       }
@@ -545,19 +541,25 @@ void FileSystem::readRootInode(PartitionEntry *partition) {
   for (i = 1; i <= super_block.s_blocks_count; i++) {
     unsigned int bitmapValue = checkBlockBitmap(partition, i);
     if (i < firstRootBataBlock && checkBlockBitmap(partition, i) == 0) {
-      QString tmpStr = QString("Block ") + i + QString(" has invalid entry in block bitmap. Bitmap value: 0, collected value: 1.\n");
+      QString tmpStr =
+          QString("Block ") + i
+              + QString(
+                  " has invalid entry in block bitmap. Bitmap value: 0, collected value: 1.\n");
       textBrowser->append(tmpStr);
       errorQt++;
       if (performRepair) {
-        setBlockBitmap(partition, i, 1);
+        setBlockBitmap(partition, i);
       }
     }
     if (blockMap[i] == 1 && bitmapValue != blockMap[i]) {
-      QString tmpStr = QString("Block ")+ QString::number(i) + QString(" has invalid entry in block bitmap. Bitmap value: ") + QString::number(bitmapValue) + QString(", collected value: ") + QString::number(blockMap[i]) + QString(".\n");
+      QString tmpStr = QString("Block ") + QString::number(i)
+          + QString(" has invalid entry in block bitmap. Bitmap value: ")
+          + QString::number(bitmapValue) + QString(", collected value: ")
+          + QString::number(blockMap[i]) + QString(".\n");
       textBrowser->append(tmpStr);
       errorQt++;
       if (performRepair) {
-        setBlockBitmap(partition, i, 1);
+        setBlockBitmap(partition, i);
       }
     }
   }
@@ -565,15 +567,18 @@ void FileSystem::readRootInode(PartitionEntry *partition) {
 
 PartitionEntry* FileSystem::getPartitionTable(int sector, int sectorOffset) {
 
-  int i;
   PartitionEntry *entry = NULL;
   PartitionEntry *first = NULL;
 
-  int partitionCount = 4;
-  if (sectorOffset != 0)
-    partitionCount = 2;
+  // MBR or EBR
+  int partitionQt;
+  if (sectorOffset == 0){
+    partitionQt= 4;
+  } else {
+      partitionQt= 2;
+  }
 
-  for (i = 1; i <= partitionCount; i++) {
+  for (int i = 1; i <= partitionQt; i++) {
     PartitionEntry *temp = readPartitionTable(sector, i, sectorOffset);
     if (entry == NULL) {
       entry = temp;
@@ -587,14 +592,14 @@ PartitionEntry* FileSystem::getPartitionTable(int sector, int sectorOffset) {
   PartitionEntry *temp = first;
   PartitionEntry *end = entry;
   while (temp != end->next) {
-    if (temp->type == 5) {
+    if (temp->type == EXTENDED_PARTITION) {
       if (extBootRecordOffset == 0)
         extBootRecordOffset = temp->startSector;
       entry->next = getPartitionTable(temp->startSector, temp->startSector);
       PartitionEntry *current = entry->next;
       PartitionEntry *prev = entry;
       while (current != NULL) {
-        if (current->type == 5 || current->type == 0) {
+        if (current->type == EXTENDED_PARTITION || current->type == 0) {
           if (current->next == NULL) {
             free(current);
             prev->next = NULL;
@@ -639,11 +644,23 @@ void FileSystem::setInfo() {
 }
 
 void FileSystem::freeInfo() {
-  free(inodeMap);
-  free(inodeLinkCount);
-  free(blockMap);
+  free (inodeMap);
+  free (inodeLinkCount);
+  free (blockMap);
+}
+
+void FileSystem::finishFileSystemChecking(){
+    progressBar->setValue(100);
+    textBrowser->append(QString::number(errorQt) + " errors were found. ");
+    if (performRepair) {
+      textBrowser->append(
+          "Filesystem has been successfully checked and repaired.");
+    } else {
+      textBrowser->append(
+          "Filesystem has been successfully checked. For repair uncheck box under start button.");
+    }
 }
 
 FileSystem::~FileSystem() {
-  close(device);
+  close (device);
 }
