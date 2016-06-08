@@ -3,7 +3,7 @@
 FileSystem::FileSystem(const char* diskImage, bool performRepair,
                        QTextBrowser *textBrowser, QProgressBar *progressBar) {
   textBrowser->clear();
-  if ((device = open(diskImage, O_RDWR)) == -1) {
+  if ((device = open(diskImage ,O_RDONLY,0)) == -1) {
     textBrowser->append("Device not found.");
     return;
   }
